@@ -1,0 +1,321 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// USER & AUTH
+// ============================================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  name          String?
+  role          String    @default("user") // admin, support, user, premium_user
+  telegramChatId String?
+  isActive      Boolean   @default(true)
+  isVerified    Boolean   @default(false)
+  twoFactorEnabled Boolean @default(false)
+  twoFactorSecret String?
+  lastLoginAt   DateTime?
+  lastLoginIp   String?
+  loginAttempts Int       @default(0)
+  lockedUntil   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  sessions       BrokerSession[]
+  strategies     Strategy[]
+  bots           Bot[]
+  trades         Trade[]
+  subscriptions  Subscription[]
+  notifications  Notification[]
+  riskEvents     RiskEvent[]
+  auditLogs      AuditLog[]
+  apiKeys        ApiKey[]
+}
+
+model ApiKey {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  keyHash     String
+  keyPrefix   String
+  permissions String   @default("read") // read, trade, admin
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  isRevoked   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================
+// BROKER SESSIONS
+// ============================================================
+
+model BrokerSession {
+  id              String    @id @default(cuid())
+  userId          String
+  brokerName      String    // pocketoption, quotex, etc.
+  sessionTokenEnc String    // encrypted broker session token
+  accountId       String?
+  accountType     String    @default("demo") // demo, live
+  balance         Float     @default(0)
+  currency        String    @default("USD")
+  isActive        Boolean   @default(true)
+  lastHeartbeatAt DateTime?
+  lastTradeAt     DateTime?
+  isConnected     Boolean   @default(false)
+  metadata        String?   // JSON encrypted metadata
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bots Bot[]
+}
+
+// ============================================================
+// STRATEGIES
+// ============================================================
+
+model Strategy {
+  id            String    @id @default(cuid())
+  userId        String
+  name          String
+  description   String?
+  version       Int       @default(1)
+  isActive      Boolean   @default(true)
+  conditions    String    // JSON array of conditions
+  logic         String    @default("AND") // AND, OR
+  actionConfig  String    // JSON: { type, amount, expiry, asset }
+  riskConfig    String    // JSON: { stop_after_losses, max_daily_loss, ... }
+  timeframe     String    @default("1m") // 30s, 1m, 5m, 15m, 1h
+  indicators    String    // JSON array of indicator configs
+  cooldownSec   Int       @default(30)
+  maxDailyTrades Int      @default(50)
+  executionWindowStart String? // HH:MM
+  executionWindowEnd   String? // HH:MM
+  isTemplate    Boolean   @default(false)
+  shareCount    Int       @default(0)
+  totalBots     Int       @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bots Bot[]
+  trades Trade[]
+}
+
+// ============================================================
+// BOTS
+// ============================================================
+
+model Bot {
+  id              String    @id @default(cuid())
+  userId          String
+  strategyId      String
+  sessionId       String
+  name            String
+  status          String    @default("created") // created, running, paused, stopped, error, emergency_stop
+  initialBalance  Float
+  currentBalance  Float
+  profitLoss      Float     @default(0)
+  totalTrades     Int       @default(0)
+  winTrades       Int       @default(0)
+  lossTrades      Int       @default(0)
+  winRate         Float     @default(0)
+  maxDrawdown     Float     @default(0)
+  currentDrawdown Float     @default(0)
+  dailyLoss       Float     @default(0)
+  dailyTrades     Int       @default(0)
+  consecutiveLosses Int     @default(0)
+  avgLatencyMs    Float     @default(0)
+  uptimeSeconds   Int       @default(0)
+  lastSignalAt    DateTime?
+  lastTradeAt     DateTime?
+  errorCount      Int       @default(0)
+  lastError       String?
+  config          String?   // JSON overrides
+  startedAt       DateTime?
+  stoppedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  strategy Strategy      @relation(fields: [strategyId], references: [id])
+  session  BrokerSession @relation(fields: [sessionId], references: [id])
+  trades   Trade[]
+  logs     BotLog[]
+}
+
+// ============================================================
+// TRADES
+// ============================================================
+
+model Trade {
+  id              String    @id @default(cuid())
+  botId           String
+  userId          String
+  sessionId       String
+  strategyId      String
+  direction       String    // CALL (BUY), PUT (SELL)
+  asset           String    // currency pair
+  amount          Float
+  expiry          Int       // seconds
+  entryPrice      Float
+  exitPrice       Float?
+  payout          Float?
+  profit          Float?
+  status          String    @default("pending") // pending, won, lost, refunded, timeout, error
+  signalData      String?   // JSON signal that triggered trade
+  validationLog   String?   // JSON validation results
+  brokerTradeId   String?
+  executionTimeMs Int?
+  latencyMs       Int?
+  errorReason     String?
+  retryCount      Int       @default(0)
+  openedAt        DateTime  @default(now())
+  closedAt        DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  bot      Bot           @relation(fields: [botId], references: [id], onDelete: Cascade)
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  strategy Strategy      @relation(fields: [strategyId], references: [id])
+}
+
+// ============================================================
+// BOT LOGS
+// ============================================================
+
+model BotLog {
+  id        String   @id @default(cuid())
+  botId     String
+  level     String   @default("info") // debug, info, warn, error, critical
+  message   String
+  data      String?  // JSON additional data
+  category  String?  // signal, execution, risk, heartbeat, error
+  createdAt DateTime @default(now())
+
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================
+// RISK EVENTS
+// ============================================================
+
+model RiskEvent {
+  id            String    @id @default(cuid())
+  userId        String
+  botId         String?
+  type          String    // daily_loss_limit, consecutive_losses, drawdown_limit, max_trades, emergency, volatility, connection_lost
+  severity      String    @default("warning") // warning, critical, emergency
+  message       String
+  value         Float?
+  threshold     Float?
+  action        String    // alert, pause_bot, stop_bot, notify
+  resolved      Boolean   @default(false)
+  resolvedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================
+// NOTIFICATIONS
+// ============================================================
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String   // trade_executed, trade_won, trade_lost, bot_started, bot_stopped, risk_alert, system, daily_report
+  title     String
+  message   String
+  data      String?  // JSON
+  isRead    Boolean  @default(false)
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================
+// SUBSCRIPTIONS
+// ============================================================
+
+model Subscription {
+  id          String    @id @default(cuid())
+  userId      String
+  plan        String    @default("free") // free, starter, pro, enterprise
+  status      String    @default("active") // active, cancelled, expired, past_due
+  maxBots     Int       @default(1)
+  maxStrategies Int     @default(3)
+  maxSessions Int       @default(1)
+  features    String?   // JSON feature flags
+  stripeCustomerId String?
+  stripeSubscriptionId String?
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  cancelledAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================
+// AUDIT LOGS
+// ============================================================
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  resource  String
+  details   String?  // JSON
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+// ============================================================
+// BACKTEST
+// ============================================================
+
+model Backtest {
+  id              String   @id @default(cuid())
+  userId          String
+  strategyId      String
+  name            String
+  asset           String
+  timeframe       String
+  startDate       DateTime
+  endDate         DateTime
+  initialBalance  Float
+  finalBalance    Float
+  totalTrades     Int
+  winTrades       Int
+  lossTrades      Int
+  winRate         Float
+  maxDrawdown     Float
+  totalProfit     Float
+  profitFactor    Float
+  sharpeRatio     Float
+  avgWin          Float
+  avgLoss         Float
+  largestWin      Float
+  largestLoss     Float
+  config          String?  // JSON backtest config
+  results         String?  // JSON detailed results
+  status          String   @default("completed") // pending, running, completed, error
+  createdAt       DateTime @default(now())
+}
